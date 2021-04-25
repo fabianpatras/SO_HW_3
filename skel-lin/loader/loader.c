@@ -27,35 +27,31 @@
 		}							\
 	} while (0)
 
-#define MAPPED 0x01
+#define FILE_MAPPED 0x01
+#define MEMM_MAPPED 0x02
 
 static so_exec_t *exec;
 
 
-static int pageSize;
+static int page_size;
 static struct sigaction old_action;
 static int fd;
 
-int get_page_from_addr(char *seg_base_addr, char *addr)
+int get_page_from_addr(uintptr_t seg_base_addr, uintptr_t addr)
 {
-	return (addr - seg_base_addr) / pageSize;
+	return (addr - seg_base_addr) / page_size;
 }
 
 void *page_alligned_addr(void *addr)
 {
 	char *p = addr;
 
-	return (void *) (((p - (char *)0) / pageSize) * pageSize);
-}
-
-int no_of_file_pages(so_seg_t *segment)
-{
-	return segment->file_size / pageSize;
+	return (void *) (((p - (char *)0) / page_size) * page_size);
 }
 
 int no_of_pages(so_seg_t *segment)
 {
-	return segment->mem_size / pageSize;
+	return segment->mem_size / page_size;
 }
 
 void init_data(so_seg_t *segment)
@@ -66,175 +62,159 @@ void init_data(so_seg_t *segment)
 		return;
 
 	i = no_of_pages(segment);
-	printf("pagini [%d]\n", i);
 
 	segment->data = calloc(i, sizeof(char));
 }
 
-void copy_from_file_to_memory(so_seg_t *crt_segment, void *addr) {
-	size_t length = (uintptr_t) crt_segment->vaddr +
-			(uintptr_t) crt_segment->file_size -
-			(uintptr_t) addr;
-	size_t bytes_read = 0;
-	ssize_t rc = 0;
-	char *buffer = malloc(length * sizeof(char));
-	DIE(buffer == NULL, "malloc failed");
-	void *ptr_rc = NULL;
 
-	printf("\t\toffset de [%d] addr [%p]\n", crt_segment->offset +
-		get_page_from_addr(crt_segment->vaddr, addr) *
-		pageSize,
-		addr - crt_segment->vaddr);
-
-	rc = lseek(fd, crt_segment->offset +
-		get_page_from_addr(crt_segment->vaddr, addr) *
-		pageSize,
-		SEEK_SET);
-	DIE (rc == -1, "lseek fail");
-
-
-
-	while (bytes_read < length) {
-		rc = read(fd, buffer, length - bytes_read);
-		DIE(rc == -1, "bad read");
-
-		bytes_read += rc;
-	}
-
-	printf("se face citirea boss\n");
-
-	for (int i = 0; i < length; i++) {
-		printf("%c", buffer[i]);
-	}
-	printf("\n~~~~~~\n");
-
-	
-	printf("\tcopiem la [%p] len [%d]\n",
-		page_alligned_addr(addr),
-		length);
-
-	ptr_rc = memcpy(page_alligned_addr(addr),
-		buffer,
-		length);
-
-
-
-	printf("se face copierea boss\n");
-
-}
-
-static void segv_handler(int signum, siginfo_t *info, void *context)
+int do_segment(so_seg_t *crt_segment, uintptr_t addr)
 {
-	char *addr;
-	void *addr_rc;
-	int rc;
-	int i;
-	so_seg_t *crt_segment;
+	uintptr_t segment_start;
+	uintptr_t segment_file_end;
 
-	addr = info->si_addr;
+	uintptr_t page_start;
+	uintptr_t page_end;
 
-	// printf ("SEGMENTATION FAULT AT [%p]\n", addr);
+	void *mmap_ret = MAP_FAILED;
 
-	/* TODO 2 - check if the signal is SIGSEGV */
-	if (signum != SIGSEGV) {
-		printf("something wrong[1]?\n");
-		old_action.sa_sigaction(signum, info, context);
-	}
+	int page_number;
 
-	for (i = 0; i < exec->segments_no; i++) {
-		crt_segment = exec->segments + i;
-		if (!crt_segment->data)
-			init_data(crt_segment);
+	segment_start = crt_segment->vaddr;
+	segment_file_end = segment_start + crt_segment->file_size;
 
+	page_number = get_page_from_addr(segment_start, addr);
 
-		if (addr >= (char *)crt_segment->vaddr &&
-			addr < (char *)crt_segment->vaddr +
-			crt_segment->file_size) {
+	page_start = segment_start + page_number * page_size;
+	page_end = page_start + page_size;
 
-			if (((char *)crt_segment->data)[get_page_from_addr(
-					(void *)crt_segment->vaddr,
-					addr)] == MAPPED) {
-				break;
-			}
+	// 4 cases:
+	// 	full file page
+	// 	part file page
+	// 	part memm page
+	// 	full memm page
 
-			// printf("segment[%d]\n", i);
-			// printf("page[%d]\n",
-			// 	get_page_from_addr(
-			// 		(void *)crt_segment->vaddr,
-			// 		addr));
-			addr_rc = mmap(page_alligned_addr(addr),
-				pageSize,
+	if (page_end <= segment_file_end) {
+		// full file page case
+
+		if (((char *)crt_segment->data)[page_number] & FILE_MAPPED) {
+			return 1;
+		}
+
+		mmap_ret = mmap((void *)page_start,
+				page_size,
 				crt_segment->perm,
 				MAP_PRIVATE | MAP_FIXED,
 				fd,
 				crt_segment->offset +
-				get_page_from_addr(
-					(void *)crt_segment->vaddr,
-					addr) *
-				pageSize);
+				page_number *
+				page_size);
+		DIE (mmap_ret == MAP_FAILED, "full file page mmap failed");
 
-			DIE (addr_rc == MAP_FAILED, "mmap faield");
+		((char *)crt_segment->data)[page_number] |= FILE_MAPPED;
 
-			((char *)crt_segment->data)[get_page_from_addr(
-					(void *)crt_segment->vaddr,
-					addr)] = MAPPED;
+	} else if (page_start < segment_file_end &&
+		segment_file_end <= page_end) {
 
-
-			// if (addr_rc == MAP_FAILED ) {
-			// 	printf("something wrong[3333]?\n");
-			// } else {
-			// 	printf("ok?[%p] perm [%d]\n", addr_rc,
-			// 		crt_segment->perm);
-			// }
-
-			// here we copy the contents
-
-			if (addr <= (char *)crt_segment->vaddr +
-				crt_segment->file_size) {
-				// copy_from_file_to_memory(crt_segment, addr);
-				// mprotect(page_alligned_addr(addr),
-				// 	pageSize,
-				// 	crt_segment->perm);
-			}
-
-			// if (crt_segment->mem_size -
-			// 	crt_segment->file_size > 0 &&
-			// 	)
-
-			return;
-		} else if (addr >= (char *)crt_segment->vaddr +
-			crt_segment->file_size &&
-			addr < (char *)crt_segment->vaddr +
-			crt_segment->mem_size) {
-			
+		if (((char *)crt_segment->data)[page_number] & FILE_MAPPED) {
+			return 1;
 		}
+
+		mmap_ret = mmap((void *)page_start,
+				segment_file_end - page_start,
+				PROT_READ | PROT_WRITE,
+				MAP_PRIVATE | MAP_FIXED,
+				fd,
+				crt_segment->offset +
+				page_number *
+				page_size);
+			
+		DIE (mmap_ret == MAP_FAILED, "part file page mmap failed");
+
+		memset((void *)segment_file_end, 0,
+			page_end - segment_file_end);
+
+		mprotect((void *)page_start, page_size, crt_segment->perm);
+
+		((char *)crt_segment->data)[page_number] |= FILE_MAPPED;
+
+	} else {
+		// full memm page
+
+		if (((char *)crt_segment->data)[page_number] & MEMM_MAPPED) {
+			return 1;
+		}
+
+		mmap_ret = mmap((void *)page_start,
+				page_size,
+				crt_segment->perm,
+				MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS,
+				-1,
+				0);
+			
+		DIE (mmap_ret == MAP_FAILED, "full memm page mmap failed");
+
+		((char *)crt_segment->data)[page_number] |= MEMM_MAPPED;
 	}
 
+	return 0;
+}
+
+static void segv_handler_2(int signum, siginfo_t *info, void *context)
+{
+	uintptr_t addr;
+	uintptr_t segment_start;
+	uintptr_t segment_end;
+	so_seg_t *crt_segment;
+	int i;
+
+	addr = info->si_addr;
+
+	for (i = 0; i < exec->segments_no; i++) {
+		crt_segment = exec->segments + i;
+		segment_start = crt_segment->vaddr;
+		segment_end = segment_start + crt_segment->mem_size;
+
+		if (!crt_segment->data)
+			init_data(crt_segment);
+
+		if (addr >= segment_start && addr < segment_end) {
+			// this is the segment
+			// printf("seg [%d] SEGFAULT [%d]\n", i, addr - segment_start);
+			if (do_segment(crt_segment, addr)) {
+				// printf("no permisions\n");
+				old_action.sa_sigaction(signum, info, context);
+			}
+			return;
+		}
+
+	}
+	// printf("just segfault\n");
 	old_action.sa_sigaction(signum, info, context);
 }
 
 static void set_signal(void)
 {
 	struct sigaction action;
-	int rc;
 
-	action.sa_sigaction = segv_handler;
+	action.sa_sigaction = segv_handler_2;
 	sigemptyset(&action.sa_mask);
 	sigaddset(&action.sa_mask, SIGSEGV);
 	action.sa_flags = SA_SIGINFO;
 
-	rc = sigaction(SIGSEGV, &action, &old_action);
+	sigaction(SIGSEGV, &action, &old_action);
 }
 
 int so_init_loader(void)
 {
 	/* TODO: initialize on-demand loader */
-
-	pageSize = getpagesize();
+	page_size = getpagesize();
 	set_signal();
 
-	return -1;
+	return 0;
 }
+
+
+
 
 int so_execute(char *path, char *argv[])
 {
@@ -246,8 +226,8 @@ int so_execute(char *path, char *argv[])
 	if (fd < 0) {
 		return -1;
 	}
-
 	so_start_exec(exec, argv);
+	close(fd);
 
 	return -1;
 }
