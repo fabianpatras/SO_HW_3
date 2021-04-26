@@ -88,17 +88,16 @@ int do_segment(so_seg_t *crt_segment, uintptr_t addr)
 	page_end = page_start + page_size;
 
 	// 4 cases:
-	// 	full file page
-	// 	part file page
-	// 	part memm page
-	// 	full memm page
+	//	full file page
+	//	part file page
+	//	part memm page
+	//	full memm page
 
 	if (page_end <= segment_file_end) {
 		// full file page case
 
-		if (((char *)crt_segment->data)[page_number] & FILE_MAPPED) {
+		if (((char *)crt_segment->data)[page_number] & FILE_MAPPED)
 			return 1;
-		}
 
 		mmap_ret = mmap((void *)page_start,
 				page_size,
@@ -108,16 +107,15 @@ int do_segment(so_seg_t *crt_segment, uintptr_t addr)
 				crt_segment->offset +
 				page_number *
 				page_size);
-		DIE (mmap_ret == MAP_FAILED, "full file page mmap failed");
+		DIE(mmap_ret == MAP_FAILED, "full file page mmap failed");
 
 		((char *)crt_segment->data)[page_number] |= FILE_MAPPED;
 
 	} else if (page_start < segment_file_end &&
 		segment_file_end <= page_end) {
 
-		if (((char *)crt_segment->data)[page_number] & FILE_MAPPED) {
+		if (((char *)crt_segment->data)[page_number] & FILE_MAPPED)
 			return 1;
-		}
 
 		mmap_ret = mmap((void *)page_start,
 				segment_file_end - page_start,
@@ -127,8 +125,8 @@ int do_segment(so_seg_t *crt_segment, uintptr_t addr)
 				crt_segment->offset +
 				page_number *
 				page_size);
-			
-		DIE (mmap_ret == MAP_FAILED, "part file page mmap failed");
+
+		DIE(mmap_ret == MAP_FAILED, "part file page mmap failed");
 
 		memset((void *)segment_file_end, 0,
 			page_end - segment_file_end);
@@ -140,9 +138,8 @@ int do_segment(so_seg_t *crt_segment, uintptr_t addr)
 	} else {
 		// full memm page
 
-		if (((char *)crt_segment->data)[page_number] & MEMM_MAPPED) {
+		if (((char *)crt_segment->data)[page_number] & MEMM_MAPPED)
 			return 1;
-		}
 
 		mmap_ret = mmap((void *)page_start,
 				page_size,
@@ -150,8 +147,8 @@ int do_segment(so_seg_t *crt_segment, uintptr_t addr)
 				MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS,
 				-1,
 				0);
-			
-		DIE (mmap_ret == MAP_FAILED, "full memm page mmap failed");
+
+		DIE(mmap_ret == MAP_FAILED, "full memm page mmap failed");
 
 		((char *)crt_segment->data)[page_number] |= MEMM_MAPPED;
 	}
@@ -159,7 +156,7 @@ int do_segment(so_seg_t *crt_segment, uintptr_t addr)
 	return 0;
 }
 
-static void segv_handler_2(int signum, siginfo_t *info, void *context)
+static void segv_handler(int signum, siginfo_t *info, void *context)
 {
 	uintptr_t addr;
 	uintptr_t segment_start;
@@ -167,7 +164,7 @@ static void segv_handler_2(int signum, siginfo_t *info, void *context)
 	so_seg_t *crt_segment;
 	int i;
 
-	addr = info->si_addr;
+	addr = (uintptr_t) info->si_addr;
 
 	for (i = 0; i < exec->segments_no; i++) {
 		crt_segment = exec->segments + i;
@@ -178,17 +175,13 @@ static void segv_handler_2(int signum, siginfo_t *info, void *context)
 			init_data(crt_segment);
 
 		if (addr >= segment_start && addr < segment_end) {
-			// this is the segment
-			// printf("seg [%d] SEGFAULT [%d]\n", i, addr - segment_start);
-			if (do_segment(crt_segment, addr)) {
-				// printf("no permisions\n");
+			if (do_segment(crt_segment, addr))
 				old_action.sa_sigaction(signum, info, context);
-			}
+
 			return;
 		}
 
 	}
-	// printf("just segfault\n");
 	old_action.sa_sigaction(signum, info, context);
 }
 
@@ -196,7 +189,7 @@ static void set_signal(void)
 {
 	struct sigaction action;
 
-	action.sa_sigaction = segv_handler_2;
+	action.sa_sigaction = segv_handler;
 	sigemptyset(&action.sa_mask);
 	sigaddset(&action.sa_mask, SIGSEGV);
 	action.sa_flags = SA_SIGINFO;
@@ -221,11 +214,11 @@ int so_execute(char *path, char *argv[])
 	exec = so_parse_exec(path);
 	if (!exec)
 		return -1;
-	
+
 	fd = open(path, O_RDWR);
-	if (fd < 0) {
+	if (fd < 0)
 		return -1;
-	}
+
 	so_start_exec(exec, argv);
 	close(fd);
 

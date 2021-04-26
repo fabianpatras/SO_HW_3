@@ -15,7 +15,7 @@ loader.o: loader/loader.c
 	$(CC) $(CFLAGS) -o $@ -c $<
 
 test:
-	cp libso_loader.so ../checker-lin && cd ../checker-lin && make -f Makefile.checker
+	cp loader/loader.c ../checker-lin && cp libso_loader.so ../checker-lin && cd ../checker-lin && make -f Makefile.checker
 
 .PHONY: clean
 clean:
