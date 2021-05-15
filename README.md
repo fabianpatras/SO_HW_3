@@ -1,7 +1,3 @@
-Name: Anton-Fabian Patras
-
-Group: 334CB
-
 # Assignment 3 ELF Loader
 
 ## Main idea
